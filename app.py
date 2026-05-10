@@ -187,22 +187,49 @@ if st.session_state.show_settings:
     st.selectbox("Abfragerichtung", ["DE-IT","IT-DE","Gemischt"], key="direction_mode")
 
     st.subheader("Wahrscheinlichkeit / Gewichtung")
-    st.slider("Chance für tiefe Ratings (%)", 0, 50, 10, 1, key="low_rating_chance_int")
-    st.slider("Stärke der Rating-Gewichtung", 1.0, 3.0, 1.3, 0.1, key="weighting_strength")
+    st.slider("Chance für tiefe Ratings (%)", min_value=0, max_value=50, step=1, key="low_rating_chance_int")
+    st.slider("Stärke der Rating-Gewichtung", min_value=1.0, max_value=3.0, step=0.1, key="weighting_strength")
 
     st.subheader("Rating-Logik")
     st.caption("Hohe Ratings werden häufiger abgefragt. Richtige Antworten senken das Rating; falsche Antworten erhöhen es.")
+
+    # Streamlit widgets with keys keep their own state. Do not pass fixed defaults here,
+    # otherwise the mobile rerun flow can make the display look as if values were not saved.
     c3, c4 = st.columns(2)
     with c3:
-        st.number_input("Rating reduzieren bei richtig", 1, 50, 5, 1, key="rating_reduction_correct")
+        st.number_input(
+            "Rating reduzieren bei richtig",
+            min_value=1,
+            max_value=50,
+            step=1,
+            key="rating_reduction_correct",
+        )
     with c4:
-        st.number_input("Rating erhöhen bei falsch", 1, 50, 10, 1, key="rating_increase_wrong")
+        st.number_input(
+            "Rating erhöhen bei falsch",
+            min_value=1,
+            max_value=50,
+            step=1,
+            key="rating_increase_wrong",
+        )
 
     c6, c7 = st.columns(2)
     with c6:
-        st.number_input("Mindest-Rating", 1, 100, 1, 1, key="min_rating")
+        st.number_input(
+            "Mindest-Rating",
+            min_value=1,
+            max_value=100,
+            step=1,
+            key="min_rating",
+        )
     with c7:
-        st.number_input("Maximal-Rating", 10, 500, 100, 5, key="max_rating")
+        st.number_input(
+            "Maximal-Rating",
+            min_value=10,
+            max_value=500,
+            step=5,
+            key="max_rating",
+        )
 
     if st.button("Einstellungen speichern"):
         save_settings_to_disk(settings_keys)
