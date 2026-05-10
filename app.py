@@ -1,10 +1,11 @@
-import hashlib, random, shutil
+import hashlib, json, random, shutil
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import streamlit as st
 
 DATA_FILE = Path("italienisch_bibliothek.xlsx")
+SETTINGS_FILE = Path("settings.json")
 BACKUP_DIR = Path("backups")
 SHEET_LIBRARY = "Bibliothek"
 REQUIRED_COLUMNS = ["ID","Kategorie","Italienisch","Deutsch","Richtung","Rating","Richtig","Falsch","Letzte_Abfrage"]
@@ -98,6 +99,21 @@ def save_library(df):
         normalize_library(df).to_excel(writer, sheet_name=SHEET_LIBRARY, index=False)
     st.cache_data.clear()
 
+def load_settings(defaults):
+    if SETTINGS_FILE.exists():
+        try:
+            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            merged = defaults.copy()
+            merged.update(saved)
+            return merged
+        except Exception:
+            return defaults.copy()
+    return defaults.copy()
+
+def save_settings_to_disk(keys):
+    data = {k: st.session_state.get(k) for k in keys}
+    SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
 def weighted_pick(df, low_rating_chance, weighting_strength):
     if random.random() < low_rating_chance:
         low_part = df[df["Rating"] <= df["Rating"].quantile(0.35)]
@@ -127,24 +143,24 @@ df_all = st.session_state.df
 min_id_available = int(df_all["ID"].min()) if not df_all.empty else 1
 max_id_available = int(df_all["ID"].max()) if not df_all.empty else 1000
 
-# Persistent settings in session state
 defaults = {
     "id_von": min_id_available,
     "id_bis": max_id_available,
     "direction_mode": "DE-IT",
     "low_rating_chance_int": 10,
     "weighting_strength": 1.3,
-    "richtig_abzug": 5,
-    "mittel_abzug": 1,
-    "falsch_zuschlag": 10,
+    "rating_reduction_correct": 5,
+    "rating_increase_wrong": 10,
     "min_rating": 1,
     "max_rating": 100,
 }
-for k, v in defaults.items():
+settings_keys = list(defaults.keys())
+loaded_settings = load_settings(defaults)
+
+for k, v in loaded_settings.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# Clamp ID settings if new library changes range
 st.session_state.id_von = max(1, min(int(st.session_state.id_von), max_id_available))
 st.session_state.id_bis = max(1, min(int(st.session_state.id_bis), max_id_available))
 
@@ -152,11 +168,12 @@ if st.session_state.show_settings:
     st.markdown("""
     <div class="settings-box">
       <div class="settings-title">⚙ Einstellungen</div>
-      <div class="settings-note">Hier steuerst du ID-Bereich, Abfragerichtung, Rating-Logik und Bibliothek.</div>
+      <div class="settings-note">Die Einstellungen werden gespeichert. Richtig reduziert das Rating, falsch erhöht es.</div>
     </div>
     """, unsafe_allow_html=True)
 
     if st.button("← Zurück zur Abfrage"):
+        save_settings_to_disk(settings_keys)
         st.session_state.show_settings = False
         st.rerun()
 
@@ -173,20 +190,23 @@ if st.session_state.show_settings:
     st.slider("Chance für tiefe Ratings (%)", 0, 50, 10, 1, key="low_rating_chance_int")
     st.slider("Stärke der Rating-Gewichtung", 1.0, 3.0, 1.3, 0.1, key="weighting_strength")
 
-    st.subheader("Rating-Veränderung")
-    c3, c4, c5 = st.columns(3)
+    st.subheader("Rating-Logik")
+    st.caption("Hohe Ratings werden häufiger abgefragt. Richtige Antworten senken das Rating; falsche Antworten erhöhen es.")
+    c3, c4 = st.columns(2)
     with c3:
-        st.number_input("Einfach", 1, 50, 5, 1, key="richtig_abzug")
+        st.number_input("Rating reduzieren bei richtig", 1, 50, 5, 1, key="rating_reduction_correct")
     with c4:
-        st.number_input("Mittel", 0, 20, 1, 1, key="mittel_abzug")
-    with c5:
-        st.number_input("Falsch", 1, 50, 10, 1, key="falsch_zuschlag")
+        st.number_input("Rating erhöhen bei falsch", 1, 50, 10, 1, key="rating_increase_wrong")
 
     c6, c7 = st.columns(2)
     with c6:
         st.number_input("Mindest-Rating", 1, 100, 1, 1, key="min_rating")
     with c7:
         st.number_input("Maximal-Rating", 10, 500, 100, 5, key="max_rating")
+
+    if st.button("Einstellungen speichern"):
+        save_settings_to_disk(settings_keys)
+        st.success("Einstellungen gespeichert.")
 
     st.subheader("Bibliothek")
     uploaded = st.file_uploader("Neue Excel-Bibliothek hochladen", type=["xlsx"])
@@ -230,9 +250,8 @@ id_bis = int(st.session_state.id_bis)
 direction_mode = st.session_state.direction_mode
 low_rating_chance = st.session_state.low_rating_chance_int / 100
 weighting_strength = float(st.session_state.weighting_strength)
-richtig_abzug = int(st.session_state.richtig_abzug)
-mittel_abzug = int(st.session_state.mittel_abzug)
-falsch_zuschlag = int(st.session_state.falsch_zuschlag)
+rating_reduction_correct = int(st.session_state.rating_reduction_correct)
+rating_increase_wrong = int(st.session_state.rating_increase_wrong)
 min_rating = int(st.session_state.min_rating)
 max_rating = int(st.session_state.max_rating)
 
@@ -260,17 +279,15 @@ def update_card(result):
     if len(idxs)==0: return
     idx = idxs[0]
     old = int(st.session_state.df.at[idx, "Rating"])
-    if result == "easy":
-        st.session_state.df.at[idx, "Rating"] = max(min_rating, old - richtig_abzug)
-        st.session_state.df.at[idx, "Richtig"] = int(st.session_state.df.at[idx, "Richtig"]) + 1
-    elif result == "medium":
-        st.session_state.df.at[idx, "Rating"] = max(min_rating, old - mittel_abzug)
+    if result == "correct":
+        st.session_state.df.at[idx, "Rating"] = max(min_rating, old - rating_reduction_correct)
         st.session_state.df.at[idx, "Richtig"] = int(st.session_state.df.at[idx, "Richtig"]) + 1
     else:
-        st.session_state.df.at[idx, "Rating"] = min(max_rating, old + falsch_zuschlag)
+        st.session_state.df.at[idx, "Rating"] = min(max_rating, old + rating_increase_wrong)
         st.session_state.df.at[idx, "Falsch"] = int(st.session_state.df.at[idx, "Falsch"]) + 1
     st.session_state.df.at[idx, "Letzte_Abfrage"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     save_library(st.session_state.df)
+    save_settings_to_disk(settings_keys)
     next_card()
 
 if st.session_state.current_id is None:
@@ -308,18 +325,14 @@ with c2:
         next_card()
         st.rerun()
 
-r1, r2, r3 = st.columns(3)
+r1, r2 = st.columns(2)
 with r1:
-    if st.button("✕ Falsch"):
-        update_card("hard")
+    if st.button("✕ Falsch / Schwer"):
+        update_card("wrong")
         st.rerun()
 with r2:
-    if st.button("– Mittel"):
-        update_card("medium")
-        st.rerun()
-with r3:
-    if st.button("✓ Einfach"):
-        update_card("easy")
+    if st.button("✓ Richtig / Einfach"):
+        update_card("correct")
         st.rerun()
 
 st.markdown('<div class="small-action">', unsafe_allow_html=True)
@@ -330,6 +343,7 @@ with b1:
         st.rerun()
 with b2:
     if st.button("⚙ Einstellungen"):
+        save_settings_to_disk(settings_keys)
         st.session_state.show_settings = True
         st.rerun()
 st.markdown('</div>', unsafe_allow_html=True)
