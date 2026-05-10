@@ -16,6 +16,7 @@ st.markdown("""
 html, body, [data-testid="stAppViewContainer"] { background:#f7f8fb; }
 .block-container{max-width:520px;padding:.45rem .55rem .8rem .55rem;}
 header[data-testid="stHeader"], [data-testid="stToolbar"]{display:none;}
+div[data-testid="stSidebar"]{display:none;}
 div[data-testid="stVerticalBlock"]{gap:.35rem;}
 div[data-testid="stHorizontalBlock"]{gap:.45rem;}
 .app-title-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:.45rem;}
@@ -34,7 +35,10 @@ div[data-testid="stHorizontalBlock"]{gap:.45rem;}
 div[data-testid="stTextArea"] label{font-size:.76rem;color:#6b7280;font-weight:700;}
 textarea{min-height:62px!important;max-height:74px!important;border-radius:15px!important;font-size:1rem!important;background:white!important;}
 .stButton>button{width:100%;border-radius:15px;min-height:2.75rem;font-size:.94rem;font-weight:850;border:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,.04);}
-.small-action button{min-height:2.25rem!important;font-size:.72rem!important;font-weight:800!important;border-radius:13px!important;}
+.small-action button{min-height:2.35rem!important;font-size:.82rem!important;font-weight:850!important;border-radius:13px!important;}
+.settings-box{background:white;border:1px solid #e5e7eb;border-radius:18px;padding:.85rem;margin:.55rem 0;box-shadow:0 3px 12px rgba(17,24,39,.04);}
+.settings-title{font-size:1.15rem;font-weight:900;margin-bottom:.4rem;color:#111827;}
+.settings-note{font-size:.75rem;color:#6b7280;line-height:1.25;margin-bottom:.55rem;}
 .notice{border:1px solid #fde68a;background:#fffbeb;color:#78350f;border-radius:13px;padding:.48rem .62rem;font-size:.72rem;line-height:1.2;margin-top:.35rem;}
 @media (max-height: 760px){
   .question-card{padding:.62rem .65rem;}
@@ -106,72 +110,178 @@ def qa(row, mode):
     return (row["Italienisch"], row["Deutsch"], "Übersetze auf Deutsch") if direction=="IT-DE" else (row["Deutsch"], row["Italienisch"], "Übersetze auf Italienisch")
 
 def reset_card():
-    st.session_state.current_id=None; st.session_state.show_solution=False
-    st.session_state.question=""; st.session_state.answer=""; st.session_state.task_label=""; st.session_state.user_answer=""
+    st.session_state.current_id=None
+    st.session_state.show_solution=False
+    st.session_state.question=""
+    st.session_state.answer=""
+    st.session_state.task_label=""
+    st.session_state.user_answer=""
 
 optional_password_gate()
+
 if "df" not in st.session_state: st.session_state.df = load_library()
 if "current_id" not in st.session_state: reset_card()
+if "show_settings" not in st.session_state: st.session_state.show_settings = False
+if "show_stats" not in st.session_state: st.session_state.show_stats = False
 
-with st.sidebar:
-    st.header("Einstellungen")
-    df_all=st.session_state.df
-    min_id=int(df_all["ID"].min()) if not df_all.empty else 1
-    max_id=int(df_all["ID"].max()) if not df_all.empty else 1000
-    id_von=st.number_input("ID von", min_value=1, value=min_id, step=1)
-    id_bis=st.number_input("ID bis", min_value=1, value=max_id, step=1)
-    direction_mode=st.selectbox("Abfragerichtung", ["DE-IT","IT-DE","Gemischt"], index=0)
-    low_rating_chance=st.slider("Chance für tiefe Ratings",0,50,10,1)/100
-    weighting_strength=st.slider("Stärke der Rating-Gewichtung",1.0,3.0,1.3,.1)
-    richtig_abzug=st.number_input("Rating-Abzug bei einfach/richtig",1,50,5,1)
-    mittel_abzug=st.number_input("Rating-Abzug bei mittel",0,20,1,1)
-    falsch_zuschlag=st.number_input("Rating-Zuschlag bei falsch",1,50,10,1)
-    min_rating=st.number_input("Mindest-Rating",1,100,1,1)
-    max_rating=st.number_input("Maximal-Rating",10,500,100,5)
-    st.divider(); st.header("Bibliothek / Backup")
-    uploaded=st.file_uploader("Neue Excel-Bibliothek hochladen", type=["xlsx"])
+df_all = st.session_state.df
+min_id_available = int(df_all["ID"].min()) if not df_all.empty else 1
+max_id_available = int(df_all["ID"].max()) if not df_all.empty else 1000
+
+# Persistent settings in session state
+defaults = {
+    "id_von": min_id_available,
+    "id_bis": max_id_available,
+    "direction_mode": "DE-IT",
+    "low_rating_chance_int": 10,
+    "weighting_strength": 1.3,
+    "richtig_abzug": 5,
+    "mittel_abzug": 1,
+    "falsch_zuschlag": 10,
+    "min_rating": 1,
+    "max_rating": 100,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# Clamp ID settings if new library changes range
+st.session_state.id_von = max(1, min(int(st.session_state.id_von), max_id_available))
+st.session_state.id_bis = max(1, min(int(st.session_state.id_bis), max_id_available))
+
+if st.session_state.show_settings:
+    st.markdown("""
+    <div class="settings-box">
+      <div class="settings-title">⚙ Einstellungen</div>
+      <div class="settings-note">Hier steuerst du ID-Bereich, Abfragerichtung, Rating-Logik und Bibliothek.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button("← Zurück zur Abfrage"):
+        st.session_state.show_settings = False
+        st.rerun()
+
+    st.subheader("Abfrage")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.number_input("ID von", min_value=1, max_value=max_id_available, step=1, key="id_von")
+    with c2:
+        st.number_input("ID bis", min_value=1, max_value=max_id_available, step=1, key="id_bis")
+
+    st.selectbox("Abfragerichtung", ["DE-IT","IT-DE","Gemischt"], key="direction_mode")
+
+    st.subheader("Wahrscheinlichkeit / Gewichtung")
+    st.slider("Chance für tiefe Ratings (%)", 0, 50, 10, 1, key="low_rating_chance_int")
+    st.slider("Stärke der Rating-Gewichtung", 1.0, 3.0, 1.3, 0.1, key="weighting_strength")
+
+    st.subheader("Rating-Veränderung")
+    c3, c4, c5 = st.columns(3)
+    with c3:
+        st.number_input("Einfach", 1, 50, 5, 1, key="richtig_abzug")
+    with c4:
+        st.number_input("Mittel", 0, 20, 1, 1, key="mittel_abzug")
+    with c5:
+        st.number_input("Falsch", 1, 50, 10, 1, key="falsch_zuschlag")
+
+    c6, c7 = st.columns(2)
+    with c6:
+        st.number_input("Mindest-Rating", 1, 100, 1, 1, key="min_rating")
+    with c7:
+        st.number_input("Maximal-Rating", 10, 500, 100, 5, key="max_rating")
+
+    st.subheader("Bibliothek")
+    uploaded = st.file_uploader("Neue Excel-Bibliothek hochladen", type=["xlsx"])
     if uploaded is not None:
-        new_df=normalize_library(pd.read_excel(uploaded, sheet_name=SHEET_LIBRARY))
-        make_backup(); save_library(new_df); st.session_state.df=new_df; reset_card(); st.rerun()
-    if DATA_FILE.exists():
-        with open(DATA_FILE,"rb") as f:
-            st.download_button("Aktuelle Bibliothek herunterladen", f.read(), "italienisch_bibliothek_aktuell.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    if st.button("Backup jetzt erstellen"): make_backup(); st.success("Backup erstellt.")
-    if st.button("Bibliothek neu laden"): st.session_state.df=load_library(); reset_card(); st.rerun()
+        try:
+            new_df = normalize_library(pd.read_excel(uploaded, sheet_name=SHEET_LIBRARY))
+            make_backup()
+            save_library(new_df)
+            st.session_state.df = new_df
+            reset_card()
+            st.success("Neue Bibliothek geladen und gespeichert.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Upload konnte nicht verarbeitet werden: {e}")
 
-df=st.session_state.df
-filtered=df[(df["ID"]>=id_von)&(df["ID"]<=id_bis)].copy()
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "rb") as f:
+            st.download_button(
+                "Aktuelle Bibliothek herunterladen",
+                f.read(),
+                "italienisch_bibliothek_aktuell.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+    c8, c9 = st.columns(2)
+    with c8:
+        if st.button("Backup erstellen"):
+            make_backup()
+            st.success("Backup erstellt.")
+    with c9:
+        if st.button("Bibliothek neu laden"):
+            st.session_state.df = load_library()
+            reset_card()
+            st.success("Neu geladen.")
+            st.rerun()
+
+    st.stop()
+
+id_von = int(st.session_state.id_von)
+id_bis = int(st.session_state.id_bis)
+direction_mode = st.session_state.direction_mode
+low_rating_chance = st.session_state.low_rating_chance_int / 100
+weighting_strength = float(st.session_state.weighting_strength)
+richtig_abzug = int(st.session_state.richtig_abzug)
+mittel_abzug = int(st.session_state.mittel_abzug)
+falsch_zuschlag = int(st.session_state.falsch_zuschlag)
+min_rating = int(st.session_state.min_rating)
+max_rating = int(st.session_state.max_rating)
+
+df = st.session_state.df
+filtered = df[(df["ID"] >= id_von) & (df["ID"] <= id_bis)].copy()
 if filtered.empty:
-    st.warning("Keine Einträge im gewählten ID-Bereich."); st.stop()
+    st.warning("Keine Einträge im gewählten ID-Bereich.")
+    if st.button("⚙ Einstellungen öffnen"):
+        st.session_state.show_settings = True
+        st.rerun()
+    st.stop()
 
 def next_card():
-    chosen=weighted_pick(filtered, low_rating_chance, weighting_strength)
-    q,a,label=qa(chosen, direction_mode)
-    st.session_state.current_id=int(chosen["ID"]); st.session_state.question=q; st.session_state.answer=a; st.session_state.task_label=label
-    st.session_state.show_solution=False; st.session_state.user_answer=""
+    chosen = weighted_pick(filtered, low_rating_chance, weighting_strength)
+    q,a,label = qa(chosen, direction_mode)
+    st.session_state.current_id = int(chosen["ID"])
+    st.session_state.question = q
+    st.session_state.answer = a
+    st.session_state.task_label = label
+    st.session_state.show_solution = False
+    st.session_state.user_answer = ""
 
 def update_card(result):
-    cid=st.session_state.current_id
-    idxs=st.session_state.df.index[st.session_state.df["ID"]==cid]
+    cid = st.session_state.current_id
+    idxs = st.session_state.df.index[st.session_state.df["ID"] == cid]
     if len(idxs)==0: return
-    idx=idxs[0]; old=int(st.session_state.df.at[idx,"Rating"])
-    if result=="easy":
-        st.session_state.df.at[idx,"Rating"]=max(min_rating, old-richtig_abzug)
-        st.session_state.df.at[idx,"Richtig"]=int(st.session_state.df.at[idx,"Richtig"])+1
-    elif result=="medium":
-        st.session_state.df.at[idx,"Rating"]=max(min_rating, old-mittel_abzug)
-        st.session_state.df.at[idx,"Richtig"]=int(st.session_state.df.at[idx,"Richtig"])+1
+    idx = idxs[0]
+    old = int(st.session_state.df.at[idx, "Rating"])
+    if result == "easy":
+        st.session_state.df.at[idx, "Rating"] = max(min_rating, old - richtig_abzug)
+        st.session_state.df.at[idx, "Richtig"] = int(st.session_state.df.at[idx, "Richtig"]) + 1
+    elif result == "medium":
+        st.session_state.df.at[idx, "Rating"] = max(min_rating, old - mittel_abzug)
+        st.session_state.df.at[idx, "Richtig"] = int(st.session_state.df.at[idx, "Richtig"]) + 1
     else:
-        st.session_state.df.at[idx,"Rating"]=min(max_rating, old+falsch_zuschlag)
-        st.session_state.df.at[idx,"Falsch"]=int(st.session_state.df.at[idx,"Falsch"])+1
-    st.session_state.df.at[idx,"Letzte_Abfrage"]=datetime.now().strftime("%Y-%m-%d %H:%M")
-    save_library(st.session_state.df); next_card()
+        st.session_state.df.at[idx, "Rating"] = min(max_rating, old + falsch_zuschlag)
+        st.session_state.df.at[idx, "Falsch"] = int(st.session_state.df.at[idx, "Falsch"]) + 1
+    st.session_state.df.at[idx, "Letzte_Abfrage"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    save_library(st.session_state.df)
+    next_card()
 
-if st.session_state.current_id is None: next_card()
-row=st.session_state.df[st.session_state.df["ID"]==st.session_state.current_id]
-rating=int(row["Rating"].iloc[0]) if not row.empty else 0
-errors=int(row["Falsch"].iloc[0]) if not row.empty else 0
-progress=max(0,min(100,round(((int(st.session_state.current_id)-id_von+1)/max((id_bis-id_von+1),1))*100)))
+if st.session_state.current_id is None:
+    next_card()
+
+row = st.session_state.df[st.session_state.df["ID"] == st.session_state.current_id]
+rating = int(row["Rating"].iloc[0]) if not row.empty else 0
+errors = int(row["Falsch"].iloc[0]) if not row.empty else 0
+progress = max(0, min(100, round(((int(st.session_state.current_id)-id_von+1)/max((id_bis-id_von+1),1))*100)))
 
 st.markdown(f"""
 <div class="app-title-row"><div class="app-title">🇮🇹 Italienisch</div><div class="tiny-pill">{len(filtered)} Karten</div></div>
@@ -190,35 +300,45 @@ st.markdown(f"""
 
 st.text_area("Deine Antwort", placeholder="Hier deine Übersetzung eingeben ...", key="user_answer")
 
-c1,c2=st.columns(2)
+c1, c2 = st.columns(2)
 with c1:
-    if st.button("💡 Auflösen"): st.session_state.show_solution=True; st.rerun()
+    if st.button("💡 Auflösen"):
+        st.session_state.show_solution = True
+        st.rerun()
 with c2:
-    if st.button("▶ Nächster Satz"): next_card(); st.rerun()
+    if st.button("▶ Nächster Satz"):
+        next_card()
+        st.rerun()
 
-r1,r2,r3=st.columns(3)
+r1, r2, r3 = st.columns(3)
 with r1:
-    if st.button("✕ Falsch"): update_card("hard"); st.rerun()
+    if st.button("✕ Falsch"):
+        update_card("hard")
+        st.rerun()
 with r2:
-    if st.button("– Mittel"): update_card("medium"); st.rerun()
+    if st.button("– Mittel"):
+        update_card("medium")
+        st.rerun()
 with r3:
-    if st.button("✓ Einfach"): update_card("easy"); st.rerun()
+    if st.button("✓ Einfach"):
+        update_card("easy")
+        st.rerun()
 
 st.markdown('<div class="small-action">', unsafe_allow_html=True)
-b1,b2,b3,b4=st.columns(4)
+b1, b2 = st.columns(2)
 with b1:
-    if st.button("📊 Statistik"): st.session_state.show_stats=not st.session_state.get("show_stats",False)
+    if st.button("📊 Statistik"):
+        st.session_state.show_stats = not st.session_state.get("show_stats", False)
+        st.rerun()
 with b2:
-    if st.button("🔀 Mischen"): next_card(); st.rerun()
-with b3:
-    if st.button("🔢 ID"): st.info("ID-Bereich in der Seitenleiste einstellen.")
-with b4:
-    if st.button("☁ Backup"): make_backup(); st.success("Backup erstellt.")
+    if st.button("⚙ Einstellungen"):
+        st.session_state.show_settings = True
+        st.rerun()
 st.markdown('</div>', unsafe_allow_html=True)
 
 if st.session_state.get("show_stats", False):
     with st.expander("Statistik / schwierigste Sätze", expanded=True):
-        hard=filtered.sort_values(["Rating","Falsch"], ascending=False).head(20)
+        hard = filtered.sort_values(["Rating","Falsch"], ascending=False).head(20)
         st.dataframe(hard[["ID","Kategorie","Italienisch","Deutsch","Rating","Richtig","Falsch","Letzte_Abfrage"]], use_container_width=True, hide_index=True)
 
-st.markdown('<div class="notice">Online-Hinweis: regelmässig Bibliothek als Backup herunterladen. Upload/Download findest du in der Seitenleiste.</div>', unsafe_allow_html=True)
+st.markdown('<div class="notice">Online-Hinweis: Backup/Download findest du unter ⚙ Einstellungen.</div>', unsafe_allow_html=True)
