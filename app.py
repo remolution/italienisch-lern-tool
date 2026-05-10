@@ -115,7 +115,6 @@ def reset_card():
     st.session_state.question=""
     st.session_state.answer=""
     st.session_state.task_label=""
-    st.session_state.user_answer=""
 
 optional_password_gate()
 
@@ -254,7 +253,6 @@ def next_card():
     st.session_state.answer = a
     st.session_state.task_label = label
     st.session_state.show_solution = False
-    st.session_state.user_answer = ""
 
 def update_card(result):
     cid = st.session_state.current_id
