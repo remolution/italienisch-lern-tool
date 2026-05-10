@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 DATA_FILE = Path("italienisch_bibliothek.xlsx")
 SETTINGS_FILE = Path("settings.json")
@@ -49,8 +50,50 @@ textarea{min-height:62px!important;max-height:74px!important;border-radius:15px!
   .status-card{min-height:48px;padding:.35rem .15rem;}
   .notice{display:none;}
 }
+
+.audio-wrap button{
+    width:100%;
+    border-radius:15px;
+    min-height:2.75rem;
+    font-size:.94rem;
+    font-weight:850;
+    border:1px solid #e5e7eb;
+    box-shadow:0 1px 3px rgba(0,0,0,.04);
+    background:white;
+    color:#111827;
+}
+.audio-wrap button:active{ transform:scale(.99); }
+
 </style>
 """, unsafe_allow_html=True)
+
+
+def render_audio_button(text_to_speak: str):
+    safe_text = json.dumps(text_to_speak or "")
+    components.html(
+        f"""
+        <div class="audio-wrap">
+          <button onclick="speakItalian()">🔊 Ton</button>
+        </div>
+        <script>
+        function speakItalian() {{
+            const text = {safe_text};
+            if (!text) return;
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = "it-IT";
+            utterance.rate = 0.86;
+            utterance.pitch = 1.0;
+            const voices = window.speechSynthesis.getVoices();
+            const italianVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith("it"));
+            if (italianVoice) utterance.voice = italianVoice;
+            window.speechSynthesis.speak(utterance);
+        }}
+        </script>
+        """,
+        height=58,
+    )
+
 
 def optional_password_gate():
     try:
@@ -146,8 +189,8 @@ def weighted_pick(df, low_rating_chance, weighting_strength):
 def qa(row, mode):
     direction = random.choice(["IT-DE","DE-IT"]) if mode == "Gemischt" else mode
     if direction == "IT-DE":
-        return row["Italienisch"], row["Deutsch"], "Übersetze auf Deutsch"
-    return row["Deutsch"], row["Italienisch"], "Übersetze auf Italienisch"
+        return row["Italienisch"], row["Deutsch"], "Übersetze auf Deutsch", row["Italienisch"]
+    return row["Deutsch"], row["Italienisch"], "Übersetze auf Italienisch", row["Italienisch"]
 
 def reset_card():
     st.session_state.current_id = None
@@ -155,6 +198,7 @@ def reset_card():
     st.session_state.question = ""
     st.session_state.answer = ""
     st.session_state.task_label = ""
+    st.session_state.audio_text = ""
 
 optional_password_gate()
 
@@ -310,11 +354,12 @@ if filtered.empty:
 
 def next_card():
     chosen = weighted_pick(filtered, low_rating_chance, weighting_strength)
-    q, a, label = qa(chosen, direction_mode)
+    q, a, label, audio_text = qa(chosen, direction_mode)
     st.session_state.current_id = int(chosen["ID"])
     st.session_state.question = q
     st.session_state.answer = a
     st.session_state.task_label = label
+    st.session_state.audio_text = audio_text
     st.session_state.show_solution = False
 
 def update_card(result):
@@ -360,13 +405,15 @@ st.markdown(f"""
 
 st.text_area("Deine Antwort", placeholder="Hier deine Übersetzung eingeben ...", key="user_answer")
 
-c1, c2 = st.columns(2)
+c1, c2, c3 = st.columns(3)
 with c1:
     if st.button("💡 Auflösen"):
         st.session_state.show_solution = True
         st.rerun()
 with c2:
-    if st.button("▶ Nächster Satz"):
+    render_audio_button(st.session_state.get("audio_text", ""))
+with c3:
+    if st.button("▶ Weiter"):
         next_card()
         st.rerun()
 
