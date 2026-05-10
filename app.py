@@ -53,21 +53,26 @@ textarea{min-height:62px!important;max-height:74px!important;border-radius:15px!
 """, unsafe_allow_html=True)
 
 def optional_password_gate():
-    try: password = st.secrets.get("APP_PASSWORD", None)
-    except Exception: password = None
-    if not password or st.session_state.get("authenticated", False): return
+    try:
+        password = st.secrets.get("APP_PASSWORD", None)
+    except Exception:
+        password = None
+    if not password or st.session_state.get("authenticated", False):
+        return
     st.title("🇮🇹 Italienisch Lern-Tool")
     entered = st.text_input("Passwort", type="password")
     if st.button("Einloggen"):
         if hashlib.sha256(entered.encode()).hexdigest() == hashlib.sha256(str(password).encode()).hexdigest():
-            st.session_state.authenticated=True; st.rerun()
-        else: st.error("Falsches Passwort.")
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Falsches Passwort.")
     st.stop()
 
 def normalize_library(df):
     for col in REQUIRED_COLUMNS:
         if col not in df.columns:
-            df[col] = 50 if col=="Rating" else (0 if col in ["Richtig","Falsch"] else ("IT-DE" if col=="Richtung" else ""))
+            df[col] = 50 if col == "Rating" else (0 if col in ["Richtig","Falsch"] else ("IT-DE" if col == "Richtung" else ""))
     df = df[REQUIRED_COLUMNS].copy()
     df["ID"] = pd.to_numeric(df["ID"], errors="coerce")
     df = df.dropna(subset=["ID"])
@@ -76,19 +81,21 @@ def normalize_library(df):
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default).astype(int)
     for col in ["Kategorie","Italienisch","Deutsch","Richtung","Letzte_Abfrage"]:
         df[col] = df[col].fillna("").astype(str)
-    df.loc[df["Richtung"].eq(""),"Richtung"]="IT-DE"
+    df.loc[df["Richtung"].eq(""), "Richtung"] = "IT-DE"
     return df.sort_values("ID").reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
 def load_library_from_disk(mtime):
-    if not DATA_FILE.exists(): return pd.DataFrame(columns=REQUIRED_COLUMNS)
+    if not DATA_FILE.exists():
+        return pd.DataFrame(columns=REQUIRED_COLUMNS)
     return normalize_library(pd.read_excel(DATA_FILE, sheet_name=SHEET_LIBRARY))
 
 def load_library():
     return load_library_from_disk(DATA_FILE.stat().st_mtime if DATA_FILE.exists() else 0)
 
 def make_backup():
-    if not DATA_FILE.exists(): return None
+    if not DATA_FILE.exists():
+        return None
     BACKUP_DIR.mkdir(exist_ok=True)
     path = BACKUP_DIR / f"italienisch_bibliothek_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     shutil.copy(DATA_FILE, path)
@@ -99,141 +106,149 @@ def save_library(df):
         normalize_library(df).to_excel(writer, sheet_name=SHEET_LIBRARY, index=False)
     st.cache_data.clear()
 
+def default_settings(min_id, max_id):
+    return {
+        "id_von": min_id,
+        "id_bis": max_id,
+        "direction_mode": "DE-IT",
+        "low_rating_chance_int": 10,
+        "weighting_strength": 1.3,
+        "rating_reduction_correct": 5,
+        "rating_increase_wrong": 10,
+        "min_rating": 1,
+        "max_rating": 100,
+    }
+
 def load_settings(defaults):
+    data = defaults.copy()
     if SETTINGS_FILE.exists():
         try:
             saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            merged = defaults.copy()
-            merged.update(saved)
-            return merged
+            data.update(saved)
         except Exception:
-            return defaults.copy()
-    return defaults.copy()
+            pass
+    return data
 
-def save_settings_to_disk(keys):
-    data = {k: st.session_state.get(k) for k in keys}
+def save_settings(data):
     SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def apply_settings_to_state(data):
+    st.session_state.settings = data.copy()
 
 def weighted_pick(df, low_rating_chance, weighting_strength):
     if random.random() < low_rating_chance:
         low_part = df[df["Rating"] <= df["Rating"].quantile(0.35)]
-        if not low_part.empty: return low_part.sample(1).iloc[0]
-    weights = df["Rating"].clip(lower=1).astype(float) ** weighting_strength
+        if not low_part.empty:
+            return low_part.sample(1).iloc[0]
+    weights = df["Rating"].clip(lower=1).astype(float) ** float(weighting_strength)
     return df.sample(1, weights=weights).iloc[0]
 
 def qa(row, mode):
-    direction = random.choice(["IT-DE","DE-IT"]) if mode=="Gemischt" else mode
-    return (row["Italienisch"], row["Deutsch"], "Übersetze auf Deutsch") if direction=="IT-DE" else (row["Deutsch"], row["Italienisch"], "Übersetze auf Italienisch")
+    direction = random.choice(["IT-DE","DE-IT"]) if mode == "Gemischt" else mode
+    if direction == "IT-DE":
+        return row["Italienisch"], row["Deutsch"], "Übersetze auf Deutsch"
+    return row["Deutsch"], row["Italienisch"], "Übersetze auf Italienisch"
 
 def reset_card():
-    st.session_state.current_id=None
-    st.session_state.show_solution=False
-    st.session_state.question=""
-    st.session_state.answer=""
-    st.session_state.task_label=""
+    st.session_state.current_id = None
+    st.session_state.show_solution = False
+    st.session_state.question = ""
+    st.session_state.answer = ""
+    st.session_state.task_label = ""
 
 optional_password_gate()
 
-if "df" not in st.session_state: st.session_state.df = load_library()
-if "current_id" not in st.session_state: reset_card()
-if "show_settings" not in st.session_state: st.session_state.show_settings = False
-if "show_stats" not in st.session_state: st.session_state.show_stats = False
+if "df" not in st.session_state:
+    st.session_state.df = load_library()
+if "current_id" not in st.session_state:
+    reset_card()
+if "show_settings" not in st.session_state:
+    st.session_state.show_settings = False
+if "show_stats" not in st.session_state:
+    st.session_state.show_stats = False
 
 df_all = st.session_state.df
 min_id_available = int(df_all["ID"].min()) if not df_all.empty else 1
 max_id_available = int(df_all["ID"].max()) if not df_all.empty else 1000
 
-defaults = {
-    "id_von": min_id_available,
-    "id_bis": max_id_available,
-    "direction_mode": "DE-IT",
-    "low_rating_chance_int": 10,
-    "weighting_strength": 1.3,
-    "rating_reduction_correct": 5,
-    "rating_increase_wrong": 10,
-    "min_rating": 1,
-    "max_rating": 100,
-}
-settings_keys = list(defaults.keys())
-loaded_settings = load_settings(defaults)
+if "settings" not in st.session_state:
+    apply_settings_to_state(load_settings(default_settings(min_id_available, max_id_available)))
 
-for k, v in loaded_settings.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-st.session_state.id_von = max(1, min(int(st.session_state.id_von), max_id_available))
-st.session_state.id_bis = max(1, min(int(st.session_state.id_bis), max_id_available))
+# Clamp only current active settings.
+s = st.session_state.settings
+s["id_von"] = max(1, min(int(s.get("id_von", min_id_available)), max_id_available))
+s["id_bis"] = max(1, min(int(s.get("id_bis", max_id_available)), max_id_available))
+if s["id_von"] > s["id_bis"]:
+    s["id_bis"] = s["id_von"]
+st.session_state.settings = s
 
 if st.session_state.show_settings:
+    s = st.session_state.settings.copy()
+
     st.markdown("""
     <div class="settings-box">
       <div class="settings-title">⚙ Einstellungen</div>
-      <div class="settings-note">Die Einstellungen werden gespeichert. Richtig reduziert das Rating, falsch erhöht es.</div>
+      <div class="settings-note">Änderungen werden erst aktiv, wenn du unten auf «Einstellungen speichern» drückst.</div>
     </div>
     """, unsafe_allow_html=True)
 
     if st.button("← Zurück zur Abfrage"):
-        save_settings_to_disk(settings_keys)
         st.session_state.show_settings = False
         st.rerun()
 
-    st.subheader("Abfrage")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.number_input("ID von", min_value=1, max_value=max_id_available, step=1, key="id_von")
-    with c2:
-        st.number_input("ID bis", min_value=1, max_value=max_id_available, step=1, key="id_bis")
+    with st.form("settings_form", clear_on_submit=False):
+        st.subheader("Abfrage")
+        c1, c2 = st.columns(2)
+        with c1:
+            form_id_von = st.number_input("ID von", min_value=1, max_value=max_id_available, value=int(s["id_von"]), step=1)
+        with c2:
+            form_id_bis = st.number_input("ID bis", min_value=1, max_value=max_id_available, value=int(s["id_bis"]), step=1)
 
-    st.selectbox("Abfragerichtung", ["DE-IT","IT-DE","Gemischt"], key="direction_mode")
-
-    st.subheader("Wahrscheinlichkeit / Gewichtung")
-    st.slider("Chance für tiefe Ratings (%)", min_value=0, max_value=50, step=1, key="low_rating_chance_int")
-    st.slider("Stärke der Rating-Gewichtung", min_value=1.0, max_value=3.0, step=0.1, key="weighting_strength")
-
-    st.subheader("Rating-Logik")
-    st.caption("Hohe Ratings werden häufiger abgefragt. Richtige Antworten senken das Rating; falsche Antworten erhöhen es.")
-
-    # Streamlit widgets with keys keep their own state. Do not pass fixed defaults here,
-    # otherwise the mobile rerun flow can make the display look as if values were not saved.
-    c3, c4 = st.columns(2)
-    with c3:
-        st.number_input(
-            "Rating reduzieren bei richtig",
-            min_value=1,
-            max_value=50,
-            step=1,
-            key="rating_reduction_correct",
-        )
-    with c4:
-        st.number_input(
-            "Rating erhöhen bei falsch",
-            min_value=1,
-            max_value=50,
-            step=1,
-            key="rating_increase_wrong",
+        direction_options = ["DE-IT","IT-DE","Gemischt"]
+        form_direction = st.selectbox(
+            "Abfragerichtung",
+            direction_options,
+            index=direction_options.index(s.get("direction_mode", "DE-IT")) if s.get("direction_mode", "DE-IT") in direction_options else 0,
         )
 
-    c6, c7 = st.columns(2)
-    with c6:
-        st.number_input(
-            "Mindest-Rating",
-            min_value=1,
-            max_value=100,
-            step=1,
-            key="min_rating",
-        )
-    with c7:
-        st.number_input(
-            "Maximal-Rating",
-            min_value=10,
-            max_value=500,
-            step=5,
-            key="max_rating",
-        )
+        st.subheader("Wahrscheinlichkeit / Gewichtung")
+        form_low = st.slider("Chance für tiefe Ratings (%)", 0, 50, int(s["low_rating_chance_int"]), 1)
+        form_weight = st.slider("Stärke der Rating-Gewichtung", 1.0, 3.0, float(s["weighting_strength"]), 0.1)
 
-    if st.button("Einstellungen speichern"):
-        save_settings_to_disk(settings_keys)
-        st.success("Einstellungen gespeichert.")
+        st.subheader("Rating-Logik")
+        st.caption("Hohe Ratings werden häufiger abgefragt. Richtige Antworten senken das Rating; falsche Antworten erhöhen es.")
+        c3, c4 = st.columns(2)
+        with c3:
+            form_reduce = st.number_input("Rating reduzieren bei richtig", 1, 50, int(s["rating_reduction_correct"]), 1)
+        with c4:
+            form_increase = st.number_input("Rating erhöhen bei falsch", 1, 50, int(s["rating_increase_wrong"]), 1)
+
+        c6, c7 = st.columns(2)
+        with c6:
+            form_min_rating = st.number_input("Mindest-Rating", 1, 100, int(s["min_rating"]), 1)
+        with c7:
+            form_max_rating = st.number_input("Maximal-Rating", 10, 500, int(s["max_rating"]), 5)
+
+        submitted = st.form_submit_button("Einstellungen speichern")
+
+    if submitted:
+        new_settings = {
+            "id_von": int(form_id_von),
+            "id_bis": int(form_id_bis),
+            "direction_mode": form_direction,
+            "low_rating_chance_int": int(form_low),
+            "weighting_strength": float(form_weight),
+            "rating_reduction_correct": int(form_reduce),
+            "rating_increase_wrong": int(form_increase),
+            "min_rating": int(form_min_rating),
+            "max_rating": int(form_max_rating),
+        }
+        if new_settings["id_von"] > new_settings["id_bis"]:
+            new_settings["id_bis"] = new_settings["id_von"]
+        apply_settings_to_state(new_settings)
+        save_settings(new_settings)
+        reset_card()
+        st.success("Einstellungen gespeichert und übernommen.")
 
     st.subheader("Bibliothek")
     uploaded = st.file_uploader("Neue Excel-Bibliothek hochladen", type=["xlsx"])
@@ -272,18 +287,20 @@ if st.session_state.show_settings:
 
     st.stop()
 
-id_von = int(st.session_state.id_von)
-id_bis = int(st.session_state.id_bis)
-direction_mode = st.session_state.direction_mode
-low_rating_chance = st.session_state.low_rating_chance_int / 100
-weighting_strength = float(st.session_state.weighting_strength)
-rating_reduction_correct = int(st.session_state.rating_reduction_correct)
-rating_increase_wrong = int(st.session_state.rating_increase_wrong)
-min_rating = int(st.session_state.min_rating)
-max_rating = int(st.session_state.max_rating)
+s = st.session_state.settings
+id_von = int(s["id_von"])
+id_bis = int(s["id_bis"])
+direction_mode = s["direction_mode"]
+low_rating_chance = int(s["low_rating_chance_int"]) / 100
+weighting_strength = float(s["weighting_strength"])
+rating_reduction_correct = int(s["rating_reduction_correct"])
+rating_increase_wrong = int(s["rating_increase_wrong"])
+min_rating = int(s["min_rating"])
+max_rating = int(s["max_rating"])
 
 df = st.session_state.df
 filtered = df[(df["ID"] >= id_von) & (df["ID"] <= id_bis)].copy()
+
 if filtered.empty:
     st.warning("Keine Einträge im gewählten ID-Bereich.")
     if st.button("⚙ Einstellungen öffnen"):
@@ -293,7 +310,7 @@ if filtered.empty:
 
 def next_card():
     chosen = weighted_pick(filtered, low_rating_chance, weighting_strength)
-    q,a,label = qa(chosen, direction_mode)
+    q, a, label = qa(chosen, direction_mode)
     st.session_state.current_id = int(chosen["ID"])
     st.session_state.question = q
     st.session_state.answer = a
@@ -303,7 +320,8 @@ def next_card():
 def update_card(result):
     cid = st.session_state.current_id
     idxs = st.session_state.df.index[st.session_state.df["ID"] == cid]
-    if len(idxs)==0: return
+    if len(idxs) == 0:
+        return
     idx = idxs[0]
     old = int(st.session_state.df.at[idx, "Rating"])
     if result == "correct":
@@ -314,7 +332,7 @@ def update_card(result):
         st.session_state.df.at[idx, "Falsch"] = int(st.session_state.df.at[idx, "Falsch"]) + 1
     st.session_state.df.at[idx, "Letzte_Abfrage"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     save_library(st.session_state.df)
-    save_settings_to_disk(settings_keys)
+    save_settings(st.session_state.settings)
     next_card()
 
 if st.session_state.current_id is None:
@@ -370,7 +388,6 @@ with b1:
         st.rerun()
 with b2:
     if st.button("⚙ Einstellungen"):
-        save_settings_to_disk(settings_keys)
         st.session_state.show_settings = True
         st.rerun()
 st.markdown('</div>', unsafe_allow_html=True)
