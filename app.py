@@ -268,6 +268,39 @@ def default_settings(min_id: int, max_id: int):
     }
 
 
+def load_settings_from_supabase(defaults: dict) -> dict:
+    """Load app settings from Supabase table settings. Falls back to defaults."""
+    try:
+        response = supabase.table("settings").select("value").eq("key", "app_settings").execute()
+        if response.data and len(response.data) > 0 and response.data[0].get("value"):
+            saved = response.data[0]["value"]
+            merged = defaults.copy()
+            merged.update(saved)
+            return merged
+    except Exception:
+        pass
+    return defaults.copy()
+
+
+def save_settings_to_supabase(settings: dict):
+    """Persist app settings in Supabase."""
+    clean_settings = {
+        "id_von": int(settings.get("id_von", 1)),
+        "id_bis": int(settings.get("id_bis", 1000)),
+        "direction_mode": str(settings.get("direction_mode", "DE-IT")),
+        "low_rating_chance_int": int(settings.get("low_rating_chance_int", 10)),
+        "weighting_strength": float(settings.get("weighting_strength", 1.3)),
+        "rating_reduction_correct": int(settings.get("rating_reduction_correct", 5)),
+        "rating_increase_wrong": int(settings.get("rating_increase_wrong", 10)),
+        "min_rating": int(settings.get("min_rating", 1)),
+        "max_rating": int(settings.get("max_rating", 100)),
+    }
+    supabase.table("settings").upsert(
+        {"key": "app_settings", "value": clean_settings},
+        on_conflict="key",
+    ).execute()
+
+
 def reset_card():
     st.session_state.current_card = None
     st.session_state.show_solution = False
@@ -305,9 +338,10 @@ if "current_card" not in st.session_state:
 
 if "settings" not in st.session_state:
     if cards.empty:
-        st.session_state.settings = default_settings(1, 1000)
+        defaults = default_settings(1, 1000)
     else:
-        st.session_state.settings = default_settings(int(cards["id"].min()), int(cards["id"].max()))
+        defaults = default_settings(int(cards["id"].min()), int(cards["id"].max()))
+    st.session_state.settings = load_settings_from_supabase(defaults)
 
 
 # -----------------------------
@@ -417,8 +451,9 @@ if st.session_state.show_settings:
             new_settings["id_bis"] = new_settings["id_von"]
 
         st.session_state.settings = new_settings
+        save_settings_to_supabase(new_settings)
         reset_card()
-        st.success("Einstellungen gespeichert und übernommen.")
+        st.success("Einstellungen gespeichert und dauerhaft in Supabase übernommen.")
 
     st.subheader("Bibliothek / Supabase Import")
 
@@ -590,4 +625,4 @@ if st.session_state.show_stats:
             hide_index=True,
         )
 
-st.markdown('<div class="notice">Supabase aktiv: Ratings werden dauerhaft gespeichert.</div>', unsafe_allow_html=True)
+st.markdown('<div class="notice">Supabase aktiv: Ratings und Einstellungen werden dauerhaft gespeichert.</div>', unsafe_allow_html=True)
