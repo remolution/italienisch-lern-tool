@@ -1,70 +1,46 @@
-# Italienisch Lern-Tool – Online-Version v1
 
-Diese Version ist für das Hosting auf Streamlit Community Cloud vorbereitet.
+# Italienisch Lern-Tool – Supabase Version v2
 
-## Enthalten
+Diese Version speichert Ratings, Richtig/Falsch und letzte Abfrage dauerhaft in Supabase.
 
-- `app.py` – Streamlit-App
-- `italienisch_bibliothek.xlsx` – Bibliothek mit 1000 Sätzen
-- `requirements.txt` – Python-Abhängigkeiten
-- `.streamlit/secrets.toml.example` – Beispiel für Passwortschutz
+## GitHub
 
-## Lokal starten
+Bitte in deinem Repository ersetzen:
 
-```bash
-cd /Pfad/zum/Ordner/italienisch_lern_tool_online_v1
-python3 -m pip install -r requirements.txt
-python3 -m streamlit run app.py
-```
+- `app.py`
+- `requirements.txt`
 
-Dann im Browser öffnen:
+## Streamlit Secrets
 
-```text
-http://localhost:8501
-```
-
-## Online auf Streamlit Community Cloud deployen
-
-1. GitHub-Konto erstellen oder verwenden.
-2. Neues Repository erstellen, z. B. `italienisch-lern-tool`.
-3. Diese Dateien hochladen:
-   - `app.py`
-   - `requirements.txt`
-   - `italienisch_bibliothek.xlsx`
-   - Ordner `.streamlit` optional nur mit Beispiel-Datei
-4. Auf Streamlit Community Cloud einloggen.
-5. Neues App-Deployment erstellen.
-6. GitHub-Repository auswählen.
-7. Main file path: `app.py`
-8. Deploy klicken.
-
-## Passwortschutz
-
-In Streamlit Community Cloud unter App → Settings → Secrets eintragen:
+In Streamlit → App → Settings → Secrets muss stehen:
 
 ```toml
-APP_PASSWORD = "dein-passwort"
+SUPABASE_URL = "https://dein-projekt.supabase.co"
+SUPABASE_KEY = "dein-publishable-key"
 ```
 
-Wenn kein Passwort gesetzt ist, ist die App ohne Login offen.
+## Supabase Tabelle
 
-## Wichtiger Hinweis zur Speicherung
+Die Tabelle `cards` muss vorhanden sein:
 
-Streamlit Community Cloud ist nicht als dauerhafte Datenbank gedacht.
+```sql
+create table if not exists cards (
+  id integer primary key,
+  kategorie text,
+  italienisch text not null,
+  deutsch text not null,
+  richtung text default 'DE-IT',
+  rating integer default 50,
+  richtig integer default 0,
+  falsch integer default 0,
+  letzte_abfrage timestamp
+);
+```
 
-Die App speichert Fortschritt zwar in `italienisch_bibliothek.xlsx`, aber bei Neustarts/Re-Deployments kann der Dateistand verloren gehen. Deshalb:
+## Import
 
-- regelmässig in der Sidebar auf **Aktuelle Bibliothek herunterladen** klicken
-- die heruntergeladene Datei als Backup speichern
-- bei Bedarf diese Datei wieder hochladen
-
-Für eine wirklich robuste Online-Version brauchen wir später eine externe Datenbank, z. B. Supabase, Google Sheets oder eine kleine Server-Datenbank.
-
-## Verbesserungen gegenüber der lokalen Version
-
-- Passwortschutz vorbereitet
-- Upload/Download der Bibliothek
-- Backup-Funktion
-- Rating-Gewichtung zusätzlich steuerbar
-- Standardrichtung ist Deutsch → Italienisch
-- 1000 Sätze bereits enthalten
+Nach Deployment:
+1. App öffnen
+2. ⚙ Einstellungen
+3. Excel-Bibliothek hochladen
+4. App importiert die Karten nach Supabase
