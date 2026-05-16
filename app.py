@@ -1,19 +1,56 @@
-import hashlib, json, random, shutil
-from datetime import datetime
-from pathlib import Path
+import hashlib
+import json
+import random
+from datetime import datetime, timezone
+
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from supabase import create_client
 
-DATA_FILE = Path("italienisch_bibliothek.xlsx")
-SETTINGS_FILE = Path("settings.json")
-BACKUP_DIR = Path("backups")
-SHEET_LIBRARY = "Bibliothek"
-REQUIRED_COLUMNS = ["ID","Kategorie","Italienisch","Deutsch","Richtung","Rating","Richtig","Falsch","Letzte_Abfrage"]
 
-st.set_page_config(page_title="Italienisch Lern-Tool", page_icon="🇮🇹", layout="centered", initial_sidebar_state="collapsed")
+# -----------------------------
+# Konfiguration
+# -----------------------------
+TABLE_NAME = "cards"
 
-st.markdown("""
+REQUIRED_SUPABASE_COLUMNS = [
+    "id",
+    "kategorie",
+    "italienisch",
+    "deutsch",
+    "richtung",
+    "rating",
+    "richtig",
+    "falsch",
+    "letzte_abfrage",
+]
+
+EXCEL_TO_DB_COLUMNS = {
+    "ID": "id",
+    "Kategorie": "kategorie",
+    "Italienisch": "italienisch",
+    "Deutsch": "deutsch",
+    "Richtung": "richtung",
+    "Rating": "rating",
+    "Richtig": "richtig",
+    "Falsch": "falsch",
+    "Letzte_Abfrage": "letzte_abfrage",
+}
+
+
+st.set_page_config(
+    page_title="Italienisch Lern-Tool",
+    page_icon="🇮🇹",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+
+# -----------------------------
+# CSS
+# -----------------------------
+st.markdown(
+    """
 <style>
 html, body, [data-testid="stAppViewContainer"] { background:#f7f8fb; }
 .block-container{max-width:520px;padding:.45rem .55rem .8rem .55rem;}
@@ -41,16 +78,7 @@ textarea{min-height:62px!important;max-height:74px!important;border-radius:15px!
 .settings-box{background:white;border:1px solid #e5e7eb;border-radius:18px;padding:.85rem;margin:.55rem 0;box-shadow:0 3px 12px rgba(17,24,39,.04);}
 .settings-title{font-size:1.15rem;font-weight:900;margin-bottom:.4rem;color:#111827;}
 .settings-note{font-size:.75rem;color:#6b7280;line-height:1.25;margin-bottom:.55rem;}
-.notice{border:1px solid #fde68a;background:#fffbeb;color:#78350f;border-radius:13px;padding:.48rem .62rem;font-size:.72rem;line-height:1.2;margin-top:.35rem;}
-@media (max-height: 760px){
-  .question-card{padding:.62rem .65rem;}
-  .question-text{font-size:1.25rem;min-height:2.35rem;}
-  textarea{min-height:52px!important;max-height:58px!important;}
-  .stButton>button{min-height:2.45rem;}
-  .status-card{min-height:48px;padding:.35rem .15rem;}
-  .notice{display:none;}
-}
-
+.notice{border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:13px;padding:.48rem .62rem;font-size:.72rem;line-height:1.2;margin-top:.35rem;}
 .audio-wrap button{
     width:100%;
     border-radius:15px;
@@ -63,11 +91,43 @@ textarea{min-height:62px!important;max-height:74px!important;border-radius:15px!
     color:#111827;
 }
 .audio-wrap button:active{ transform:scale(.99); }
-
+@media (max-height: 760px){
+  .question-card{padding:.62rem .65rem;}
+  .question-text{font-size:1.25rem;min-height:2.35rem;}
+  textarea{min-height:52px!important;max-height:58px!important;}
+  .stButton>button{min-height:2.45rem;}
+  .status-card{min-height:48px;padding:.35rem .15rem;}
+  .notice{display:none;}
+}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
+# -----------------------------
+# Supabase Verbindung
+# -----------------------------
+def get_supabase_client():
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+    except Exception:
+        st.error(
+            "Supabase Secrets fehlen. Bitte in Streamlit unter Settings → Secrets "
+            "SUPABASE_URL und SUPABASE_KEY eintragen."
+        )
+        st.stop()
+
+    return create_client(url, key)
+
+
+supabase = get_supabase_client()
+
+
+# -----------------------------
+# Hilfsfunktionen
+# -----------------------------
 def render_audio_button(text_to_speak: str):
     safe_text = json.dumps(text_to_speak or "")
     components.html(
@@ -95,61 +155,98 @@ def render_audio_button(text_to_speak: str):
     )
 
 
-def optional_password_gate():
-    try:
-        password = st.secrets.get("APP_PASSWORD", None)
-    except Exception:
-        password = None
-    if not password or st.session_state.get("authenticated", False):
-        return
-    st.title("🇮🇹 Italienisch Lern-Tool")
-    entered = st.text_input("Passwort", type="password")
-    if st.button("Einloggen"):
-        if hashlib.sha256(entered.encode()).hexdigest() == hashlib.sha256(str(password).encode()).hexdigest():
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Falsches Passwort.")
-    st.stop()
+def normalize_cards_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize either Excel-style columns or Supabase-style columns."""
+    df = df.copy()
 
-def normalize_library(df):
-    for col in REQUIRED_COLUMNS:
+    # Rename Excel columns if present
+    rename_map = {col: EXCEL_TO_DB_COLUMNS[col] for col in df.columns if col in EXCEL_TO_DB_COLUMNS}
+    df = df.rename(columns=rename_map)
+
+    for col in REQUIRED_SUPABASE_COLUMNS:
         if col not in df.columns:
-            df[col] = 50 if col == "Rating" else (0 if col in ["Richtig","Falsch"] else ("IT-DE" if col == "Richtung" else ""))
-    df = df[REQUIRED_COLUMNS].copy()
-    df["ID"] = pd.to_numeric(df["ID"], errors="coerce")
-    df = df.dropna(subset=["ID"])
-    df["ID"] = df["ID"].astype(int)
-    for col, default in [("Rating",50),("Richtig",0),("Falsch",0)]:
+            if col == "rating":
+                df[col] = 50
+            elif col in ["richtig", "falsch"]:
+                df[col] = 0
+            elif col == "richtung":
+                df[col] = "DE-IT"
+            elif col == "letzte_abfrage":
+                df[col] = None
+            else:
+                df[col] = ""
+
+    df = df[REQUIRED_SUPABASE_COLUMNS].copy()
+
+    df["id"] = pd.to_numeric(df["id"], errors="coerce")
+    df = df.dropna(subset=["id"])
+    df["id"] = df["id"].astype(int)
+
+    for col, default in [("rating", 50), ("richtig", 0), ("falsch", 0)]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default).astype(int)
-    for col in ["Kategorie","Italienisch","Deutsch","Richtung","Letzte_Abfrage"]:
-        df[col] = df[col].fillna("").astype(str)
-    df.loc[df["Richtung"].eq(""), "Richtung"] = "IT-DE"
-    return df.sort_values("ID").reset_index(drop=True)
 
-@st.cache_data(show_spinner=False)
-def load_library_from_disk(mtime):
-    if not DATA_FILE.exists():
-        return pd.DataFrame(columns=REQUIRED_COLUMNS)
-    return normalize_library(pd.read_excel(DATA_FILE, sheet_name=SHEET_LIBRARY))
+    df["kategorie"] = df["kategorie"].fillna("").astype(str)
+    df["italienisch"] = df["italienisch"].fillna("").astype(str)
+    df["deutsch"] = df["deutsch"].fillna("").astype(str)
+    df["richtung"] = df["richtung"].fillna("DE-IT").astype(str)
 
-def load_library():
-    return load_library_from_disk(DATA_FILE.stat().st_mtime if DATA_FILE.exists() else 0)
+    # Supabase JSON does not like NaN
+    df["letzte_abfrage"] = df["letzte_abfrage"].where(pd.notnull(df["letzte_abfrage"]), None)
 
-def make_backup():
-    if not DATA_FILE.exists():
-        return None
-    BACKUP_DIR.mkdir(exist_ok=True)
-    path = BACKUP_DIR / f"italienisch_bibliothek_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    shutil.copy(DATA_FILE, path)
-    return path
+    return df.sort_values("id").reset_index(drop=True)
 
-def save_library(df):
-    with pd.ExcelWriter(DATA_FILE, engine="openpyxl", mode="w") as writer:
-        normalize_library(df).to_excel(writer, sheet_name=SHEET_LIBRARY, index=False)
-    st.cache_data.clear()
 
-def default_settings(min_id, max_id):
+def load_cards_from_supabase() -> pd.DataFrame:
+    response = supabase.table(TABLE_NAME).select("*").order("id").execute()
+    data = response.data or []
+    if not data:
+        return pd.DataFrame(columns=REQUIRED_SUPABASE_COLUMNS)
+    return normalize_cards_df(pd.DataFrame(data))
+
+
+def upsert_cards_to_supabase(df: pd.DataFrame):
+    df = normalize_cards_df(df)
+    records = df.to_dict(orient="records")
+
+    # Supabase/PostgREST payloads should be chunked
+    chunk_size = 500
+    for i in range(0, len(records), chunk_size):
+        chunk = records[i : i + chunk_size]
+        supabase.table(TABLE_NAME).upsert(chunk, on_conflict="id").execute()
+
+
+def update_card_in_supabase(card_id: int, rating: int, richtig: int, falsch: int):
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table(TABLE_NAME).update(
+        {
+            "rating": int(rating),
+            "richtig": int(richtig),
+            "falsch": int(falsch),
+            "letzte_abfrage": now,
+        }
+    ).eq("id", int(card_id)).execute()
+
+
+def weighted_pick(df: pd.DataFrame, low_rating_chance: float, weighting_strength: float) -> pd.Series:
+    if random.random() < low_rating_chance:
+        low_part = df[df["rating"] <= df["rating"].quantile(0.35)]
+        if not low_part.empty:
+            return low_part.sample(1).iloc[0]
+
+    weights = df["rating"].clip(lower=1).astype(float) ** float(weighting_strength)
+    return df.sample(1, weights=weights).iloc[0]
+
+
+def get_question_answer(row: dict, mode: str):
+    direction = random.choice(["IT-DE", "DE-IT"]) if mode == "Gemischt" else mode
+
+    if direction == "IT-DE":
+        return row["italienisch"], row["deutsch"], "Übersetze auf Deutsch", row["italienisch"]
+
+    return row["deutsch"], row["italienisch"], "Übersetze auf Italienisch", row["italienisch"]
+
+
+def default_settings(min_id: int, max_id: int):
     return {
         "id_von": min_id,
         "id_bis": max_id,
@@ -162,79 +259,66 @@ def default_settings(min_id, max_id):
         "max_rating": 100,
     }
 
-def load_settings(defaults):
-    data = defaults.copy()
-    if SETTINGS_FILE.exists():
-        try:
-            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            data.update(saved)
-        except Exception:
-            pass
-    return data
-
-def save_settings(data):
-    SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def apply_settings_to_state(data):
-    st.session_state.settings = data.copy()
-
-def weighted_pick(df, low_rating_chance, weighting_strength):
-    if random.random() < low_rating_chance:
-        low_part = df[df["Rating"] <= df["Rating"].quantile(0.35)]
-        if not low_part.empty:
-            return low_part.sample(1).iloc[0]
-    weights = df["Rating"].clip(lower=1).astype(float) ** float(weighting_strength)
-    return df.sample(1, weights=weights).iloc[0]
-
-def qa(row, mode):
-    direction = random.choice(["IT-DE","DE-IT"]) if mode == "Gemischt" else mode
-    if direction == "IT-DE":
-        return row["Italienisch"], row["Deutsch"], "Übersetze auf Deutsch", row["Italienisch"]
-    return row["Deutsch"], row["Italienisch"], "Übersetze auf Italienisch", row["Italienisch"]
 
 def reset_card():
-    st.session_state.current_id = None
+    st.session_state.current_card = None
     st.session_state.show_solution = False
-    st.session_state.question = ""
-    st.session_state.answer = ""
-    st.session_state.task_label = ""
-    st.session_state.audio_text = ""
 
-optional_password_gate()
 
-if "df" not in st.session_state:
-    st.session_state.df = load_library()
-if "current_id" not in st.session_state:
+def refresh_cards():
+    st.session_state.cards = load_cards_from_supabase()
     reset_card()
+
+
+# -----------------------------
+# Session State
+# -----------------------------
+if "cards" not in st.session_state:
+    st.session_state.cards = load_cards_from_supabase()
+
+cards = st.session_state.cards
+
+if cards.empty:
+    st.warning("Die Supabase-Tabelle ist noch leer. Lade unter ⚙ Einstellungen deine Excel-Bibliothek hoch.")
+    if "show_settings" not in st.session_state:
+        st.session_state.show_settings = True
+
 if "show_settings" not in st.session_state:
     st.session_state.show_settings = False
+
 if "show_stats" not in st.session_state:
     st.session_state.show_stats = False
 
-df_all = st.session_state.df
-min_id_available = int(df_all["ID"].min()) if not df_all.empty else 1
-max_id_available = int(df_all["ID"].max()) if not df_all.empty else 1000
+if "show_solution" not in st.session_state:
+    st.session_state.show_solution = False
+
+if "current_card" not in st.session_state:
+    st.session_state.current_card = None
 
 if "settings" not in st.session_state:
-    apply_settings_to_state(load_settings(default_settings(min_id_available, max_id_available)))
+    if cards.empty:
+        st.session_state.settings = default_settings(1, 1000)
+    else:
+        st.session_state.settings = default_settings(int(cards["id"].min()), int(cards["id"].max()))
 
-# Clamp only current active settings.
-s = st.session_state.settings
-s["id_von"] = max(1, min(int(s.get("id_von", min_id_available)), max_id_available))
-s["id_bis"] = max(1, min(int(s.get("id_bis", max_id_available)), max_id_available))
-if s["id_von"] > s["id_bis"]:
-    s["id_bis"] = s["id_von"]
-st.session_state.settings = s
 
+# -----------------------------
+# Einstellungen-Ansicht
+# -----------------------------
 if st.session_state.show_settings:
     s = st.session_state.settings.copy()
+    min_id_available = int(cards["id"].min()) if not cards.empty else 1
+    max_id_available = int(cards["id"].max()) if not cards.empty else 1000
 
-    st.markdown("""
-    <div class="settings-box">
-      <div class="settings-title">⚙ Einstellungen</div>
-      <div class="settings-note">Änderungen werden erst aktiv, wenn du unten auf «Einstellungen speichern» drückst.</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="settings-box">
+          <div class="settings-title">⚙ Einstellungen</div>
+          <div class="settings-note">Supabase ist aktiv. Ratings werden dauerhaft in der Datenbank gespeichert.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if st.button("← Zurück zur Abfrage"):
         st.session_state.show_settings = False
@@ -242,36 +326,69 @@ if st.session_state.show_settings:
 
     with st.form("settings_form", clear_on_submit=False):
         st.subheader("Abfrage")
+
         c1, c2 = st.columns(2)
         with c1:
-            form_id_von = st.number_input("ID von", min_value=1, max_value=max_id_available, value=int(s["id_von"]), step=1)
+            form_id_von = st.number_input(
+                "ID von",
+                min_value=1,
+                max_value=max_id_available,
+                value=max(1, min(int(s.get("id_von", min_id_available)), max_id_available)),
+                step=1,
+            )
         with c2:
-            form_id_bis = st.number_input("ID bis", min_value=1, max_value=max_id_available, value=int(s["id_bis"]), step=1)
+            form_id_bis = st.number_input(
+                "ID bis",
+                min_value=1,
+                max_value=max_id_available,
+                value=max(1, min(int(s.get("id_bis", max_id_available)), max_id_available)),
+                step=1,
+            )
 
-        direction_options = ["DE-IT","IT-DE","Gemischt"]
+        direction_options = ["DE-IT", "IT-DE", "Gemischt"]
         form_direction = st.selectbox(
             "Abfragerichtung",
             direction_options,
-            index=direction_options.index(s.get("direction_mode", "DE-IT")) if s.get("direction_mode", "DE-IT") in direction_options else 0,
+            index=direction_options.index(s.get("direction_mode", "DE-IT"))
+            if s.get("direction_mode", "DE-IT") in direction_options
+            else 0,
         )
 
         st.subheader("Wahrscheinlichkeit / Gewichtung")
-        form_low = st.slider("Chance für tiefe Ratings (%)", 0, 50, int(s["low_rating_chance_int"]), 1)
-        form_weight = st.slider("Stärke der Rating-Gewichtung", 1.0, 3.0, float(s["weighting_strength"]), 0.1)
+        form_low = st.slider("Chance für tiefe Ratings (%)", 0, 50, int(s.get("low_rating_chance_int", 10)), 1)
+        form_weight = st.slider(
+            "Stärke der Rating-Gewichtung",
+            1.0,
+            3.0,
+            float(s.get("weighting_strength", 1.3)),
+            0.1,
+        )
 
         st.subheader("Rating-Logik")
-        st.caption("Hohe Ratings werden häufiger abgefragt. Richtige Antworten senken das Rating; falsche Antworten erhöhen es.")
+        st.caption("Richtig senkt das Rating, falsch erhöht es. Hohe Ratings werden häufiger abgefragt.")
         c3, c4 = st.columns(2)
         with c3:
-            form_reduce = st.number_input("Rating reduzieren bei richtig", 1, 50, int(s["rating_reduction_correct"]), 1)
+            form_reduce = st.number_input(
+                "Rating reduzieren bei richtig",
+                1,
+                50,
+                int(s.get("rating_reduction_correct", 5)),
+                1,
+            )
         with c4:
-            form_increase = st.number_input("Rating erhöhen bei falsch", 1, 50, int(s["rating_increase_wrong"]), 1)
+            form_increase = st.number_input(
+                "Rating erhöhen bei falsch",
+                1,
+                50,
+                int(s.get("rating_increase_wrong", 10)),
+                1,
+            )
 
-        c6, c7 = st.columns(2)
+        c5, c6 = st.columns(2)
+        with c5:
+            form_min_rating = st.number_input("Mindest-Rating", 1, 100, int(s.get("min_rating", 1)), 1)
         with c6:
-            form_min_rating = st.number_input("Mindest-Rating", 1, 100, int(s["min_rating"]), 1)
-        with c7:
-            form_max_rating = st.number_input("Maximal-Rating", 10, 500, int(s["max_rating"]), 5)
+            form_max_rating = st.number_input("Maximal-Rating", 10, 500, int(s.get("max_rating", 100)), 5)
 
         submitted = st.form_submit_button("Einstellungen speichern")
 
@@ -287,51 +404,71 @@ if st.session_state.show_settings:
             "min_rating": int(form_min_rating),
             "max_rating": int(form_max_rating),
         }
+
         if new_settings["id_von"] > new_settings["id_bis"]:
             new_settings["id_bis"] = new_settings["id_von"]
-        apply_settings_to_state(new_settings)
-        save_settings(new_settings)
+
+        st.session_state.settings = new_settings
         reset_card()
         st.success("Einstellungen gespeichert und übernommen.")
 
-    st.subheader("Bibliothek")
-    uploaded = st.file_uploader("Neue Excel-Bibliothek hochladen", type=["xlsx"])
+    st.subheader("Bibliothek / Supabase Import")
+
+    uploaded = st.file_uploader("Excel-Bibliothek nach Supabase importieren", type=["xlsx"])
     if uploaded is not None:
         try:
-            new_df = normalize_library(pd.read_excel(uploaded, sheet_name=SHEET_LIBRARY))
-            make_backup()
-            save_library(new_df)
-            st.session_state.df = new_df
-            reset_card()
-            st.success("Neue Bibliothek geladen und gespeichert.")
+            excel_df = pd.read_excel(uploaded, sheet_name="Bibliothek")
+            normalized = normalize_cards_df(excel_df)
+            upsert_cards_to_supabase(normalized)
+            refresh_cards()
+            st.success(f"{len(normalized)} Karten nach Supabase importiert.")
             st.rerun()
-        except Exception as e:
-            st.error(f"Upload konnte nicht verarbeitet werden: {e}")
+        except Exception as exc:
+            st.error(f"Import fehlgeschlagen: {exc}")
 
-    if DATA_FILE.exists():
-        with open(DATA_FILE, "rb") as f:
+    if not cards.empty:
+        export_df = cards.rename(
+            columns={
+                "id": "ID",
+                "kategorie": "Kategorie",
+                "italienisch": "Italienisch",
+                "deutsch": "Deutsch",
+                "richtung": "Richtung",
+                "rating": "Rating",
+                "richtig": "Richtig",
+                "falsch": "Falsch",
+                "letzte_abfrage": "Letzte_Abfrage",
+            }
+        )
+
+        output = pd.ExcelWriter("italienisch_bibliothek_export.xlsx", engine="openpyxl")
+        export_df.to_excel(output, sheet_name="Bibliothek", index=False)
+        output.close()
+
+        with open("italienisch_bibliothek_export.xlsx", "rb") as f:
             st.download_button(
-                "Aktuelle Bibliothek herunterladen",
+                "Aktuelle Bibliothek aus Supabase herunterladen",
                 f.read(),
-                "italienisch_bibliothek_aktuell.xlsx",
+                "italienisch_bibliothek_supabase_export.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-    c8, c9 = st.columns(2)
-    with c8:
-        if st.button("Backup erstellen"):
-            make_backup()
-            st.success("Backup erstellt.")
-    with c9:
-        if st.button("Bibliothek neu laden"):
-            st.session_state.df = load_library()
-            reset_card()
-            st.success("Neu geladen.")
-            st.rerun()
+    if st.button("Daten aus Supabase neu laden"):
+        refresh_cards()
+        st.rerun()
 
     st.stop()
 
+
+# -----------------------------
+# Hauptansicht
+# -----------------------------
+cards = st.session_state.cards
+if cards.empty:
+    st.stop()
+
 s = st.session_state.settings
+
 id_von = int(s["id_von"])
 id_bis = int(s["id_bis"])
 direction_mode = s["direction_mode"]
@@ -342,66 +479,47 @@ rating_increase_wrong = int(s["rating_increase_wrong"])
 min_rating = int(s["min_rating"])
 max_rating = int(s["max_rating"])
 
-df = st.session_state.df
-filtered = df[(df["ID"] >= id_von) & (df["ID"] <= id_bis)].copy()
+filtered = cards[(cards["id"] >= id_von) & (cards["id"] <= id_bis)].copy()
 
 if filtered.empty:
-    st.warning("Keine Einträge im gewählten ID-Bereich.")
+    st.warning("Keine Karten im gewählten ID-Bereich.")
     if st.button("⚙ Einstellungen öffnen"):
         st.session_state.show_settings = True
         st.rerun()
     st.stop()
 
+
 def next_card():
     chosen = weighted_pick(filtered, low_rating_chance, weighting_strength)
-    q, a, label, audio_text = qa(chosen, direction_mode)
-    st.session_state.current_id = int(chosen["ID"])
-    st.session_state.question = q
-    st.session_state.answer = a
-    st.session_state.task_label = label
-    st.session_state.audio_text = audio_text
+    st.session_state.current_card = chosen.to_dict()
     st.session_state.show_solution = False
 
-def update_card(result):
-    cid = st.session_state.current_id
-    idxs = st.session_state.df.index[st.session_state.df["ID"] == cid]
-    if len(idxs) == 0:
-        return
-    idx = idxs[0]
-    old = int(st.session_state.df.at[idx, "Rating"])
-    if result == "correct":
-        st.session_state.df.at[idx, "Rating"] = max(min_rating, old - rating_reduction_correct)
-        st.session_state.df.at[idx, "Richtig"] = int(st.session_state.df.at[idx, "Richtig"]) + 1
-    else:
-        st.session_state.df.at[idx, "Rating"] = min(max_rating, old + rating_increase_wrong)
-        st.session_state.df.at[idx, "Falsch"] = int(st.session_state.df.at[idx, "Falsch"]) + 1
-    st.session_state.df.at[idx, "Letzte_Abfrage"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    save_library(st.session_state.df)
-    save_settings(st.session_state.settings)
+
+if st.session_state.current_card is None:
     next_card()
 
-if st.session_state.current_id is None:
-    next_card()
+card = st.session_state.current_card
+question, answer, label, audio_text = get_question_answer(card, direction_mode)
 
-row = st.session_state.df[st.session_state.df["ID"] == st.session_state.current_id]
-rating = int(row["Rating"].iloc[0]) if not row.empty else 0
-errors = int(row["Falsch"].iloc[0]) if not row.empty else 0
-progress = max(0, min(100, round(((int(st.session_state.current_id)-id_von+1)/max((id_bis-id_von+1),1))*100)))
+progress = max(0, min(100, round(((int(card["id"]) - id_von + 1) / max((id_bis - id_von + 1), 1)) * 100)))
 
-st.markdown(f"""
+st.markdown(
+    f"""
 <div class="app-title-row"><div class="app-title">🇮🇹 Italienisch</div><div class="tiny-pill">{len(filtered)} Karten</div></div>
 <div class="status-grid">
-<div class="status-card"><div class="status-label">ID</div><div class="status-value">{st.session_state.current_id}</div></div>
-<div class="status-card"><div class="status-label">Rating</div><div class="status-value">{rating}</div></div>
-<div class="status-card"><div class="status-label">Fehler</div><div class="status-value">{errors}</div></div>
+<div class="status-card"><div class="status-label">ID</div><div class="status-value">{int(card["id"])}</div></div>
+<div class="status-card"><div class="status-label">Rating</div><div class="status-value">{int(card["rating"])}</div></div>
+<div class="status-card"><div class="status-label">Fehler</div><div class="status-value">{int(card["falsch"])}</div></div>
 <div class="status-card"><div class="status-label">Bereich</div><div class="status-value">{progress}%</div></div>
 </div>
 <div class="question-card">
-<div class="question-meta">ID {st.session_state.current_id} · {st.session_state.task_label}</div>
-<div class="question-text">{st.session_state.question}</div>
-{("<div class='solution-card'><div class='solution-label'>Lösung</div><div class='solution-text'>"+st.session_state.answer+"</div></div>") if st.session_state.show_solution else ""}
+<div class="question-meta">ID {int(card["id"])} · {label}</div>
+<div class="question-text">{question}</div>
+{("<div class='solution-card'><div class='solution-label'>Lösung</div><div class='solution-text'>" + answer + "</div></div>") if st.session_state.show_solution else ""}
 </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 st.text_area("Deine Antwort", placeholder="Hier deine Übersetzung eingeben ...", key="user_answer")
 
@@ -410,8 +528,10 @@ with c1:
     if st.button("💡 Auflösen"):
         st.session_state.show_solution = True
         st.rerun()
+
 with c2:
-    render_audio_button(st.session_state.get("audio_text", ""))
+    render_audio_button(audio_text)
+
 with c3:
     if st.button("▶ Weiter"):
         next_card()
@@ -420,28 +540,46 @@ with c3:
 r1, r2 = st.columns(2)
 with r1:
     if st.button("✕ Falsch / Schwer"):
-        update_card("wrong")
+        new_rating = min(max_rating, int(card["rating"]) + rating_increase_wrong)
+        new_richtig = int(card["richtig"])
+        new_falsch = int(card["falsch"]) + 1
+
+        update_card_in_supabase(card["id"], new_rating, new_richtig, new_falsch)
+        refresh_cards()
+        next_card()
         st.rerun()
+
 with r2:
     if st.button("✓ Richtig / Einfach"):
-        update_card("correct")
+        new_rating = max(min_rating, int(card["rating"]) - rating_reduction_correct)
+        new_richtig = int(card["richtig"]) + 1
+        new_falsch = int(card["falsch"])
+
+        update_card_in_supabase(card["id"], new_rating, new_richtig, new_falsch)
+        refresh_cards()
+        next_card()
         st.rerun()
 
 st.markdown('<div class="small-action">', unsafe_allow_html=True)
 b1, b2 = st.columns(2)
 with b1:
     if st.button("📊 Statistik"):
-        st.session_state.show_stats = not st.session_state.get("show_stats", False)
+        st.session_state.show_stats = not st.session_state.show_stats
         st.rerun()
+
 with b2:
     if st.button("⚙ Einstellungen"):
         st.session_state.show_settings = True
         st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
-if st.session_state.get("show_stats", False):
+if st.session_state.show_stats:
     with st.expander("Statistik / schwierigste Sätze", expanded=True):
-        hard = filtered.sort_values(["Rating","Falsch"], ascending=False).head(20)
-        st.dataframe(hard[["ID","Kategorie","Italienisch","Deutsch","Rating","Richtig","Falsch","Letzte_Abfrage"]], use_container_width=True, hide_index=True)
+        hard = filtered.sort_values(["rating", "falsch"], ascending=False).head(20)
+        st.dataframe(
+            hard[["id", "kategorie", "italienisch", "deutsch", "rating", "richtig", "falsch", "letzte_abfrage"]],
+            use_container_width=True,
+            hide_index=True,
+        )
 
-st.markdown('<div class="notice">Online-Hinweis: Backup/Download findest du unter ⚙ Einstellungen.</div>', unsafe_allow_html=True)
+st.markdown('<div class="notice">Supabase aktiv: Ratings werden dauerhaft gespeichert.</div>', unsafe_allow_html=True)
