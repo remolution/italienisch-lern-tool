@@ -156,7 +156,7 @@ def render_audio_button(text_to_speak: str):
 
 
 def normalize_cards_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize either Excel-style columns or Supabase-style columns."""
+    """Normalize either Excel-style columns or Supabase-style columns and remove all NaN values."""
     df = df.copy()
 
     # Rename Excel columns if present
@@ -185,16 +185,22 @@ def normalize_cards_df(df: pd.DataFrame) -> pd.DataFrame:
     for col, default in [("rating", 50), ("richtig", 0), ("falsch", 0)]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default).astype(int)
 
-    df["kategorie"] = df["kategorie"].fillna("").astype(str)
-    df["italienisch"] = df["italienisch"].fillna("").astype(str)
-    df["deutsch"] = df["deutsch"].fillna("").astype(str)
-    df["richtung"] = df["richtung"].fillna("DE-IT").astype(str)
+    for col in ["kategorie", "italienisch", "deutsch", "richtung"]:
+        df[col] = df[col].fillna("").astype(str)
 
-    # Supabase JSON does not like NaN
-    df["letzte_abfrage"] = df["letzte_abfrage"].where(pd.notnull(df["letzte_abfrage"]), None)
+    df.loc[df["richtung"].eq(""), "richtung"] = "DE-IT"
+
+    # Clean timestamp column: invalid/empty values must become None, never NaN/NaT
+    df["letzte_abfrage"] = pd.to_datetime(df["letzte_abfrage"], errors="coerce")
+    df["letzte_abfrage"] = df["letzte_abfrage"].apply(
+        lambda value: value.isoformat() if pd.notnull(value) else None
+    )
+
+    # Final JSON-safe cleanup. Supabase rejects float NaN values.
+    df = df.astype(object)
+    df = df.where(pd.notnull(df), None)
 
     return df.sort_values("id").reset_index(drop=True)
-
 
 def load_cards_from_supabase() -> pd.DataFrame:
     response = supabase.table(TABLE_NAME).select("*").order("id").execute()
@@ -206,6 +212,8 @@ def load_cards_from_supabase() -> pd.DataFrame:
 
 def upsert_cards_to_supabase(df: pd.DataFrame):
     df = normalize_cards_df(df)
+    # Ensure no NaN survives into JSON payload
+    df = df.astype(object).where(pd.notnull(df), None)
     records = df.to_dict(orient="records")
 
     # Supabase/PostgREST payloads should be chunked
