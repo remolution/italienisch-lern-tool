@@ -1,4 +1,3 @@
-import hashlib
 import json
 import random
 from datetime import datetime, timezone
@@ -128,41 +127,74 @@ supabase = get_supabase_client()
 # Hilfsfunktionen
 # -----------------------------
 def render_audio_button(text_to_speak: str):
-    """Italian pronunciation using browser speech synthesis."""
+    """Italian pronunciation in an isolated iframe for reliable mobile clicks."""
     safe_text = json.dumps(text_to_speak or "")
-    function_name = "speakItalian_" + hashlib.sha1(
-        (text_to_speak or "").encode("utf-8")
-    ).hexdigest()[:12]
 
-    st.html(
-        f"""
-        <div class="audio-wrap">
-          <button type="button" onclick="window.{function_name}()">🔊 Ton</button>
-        </div>
-        <script>
-        window.{function_name} = function() {{
-            const text = {safe_text};
-            if (!text || !("speechSynthesis" in window)) return;
+    audio_html = f"""
+    <!doctype html>
+    <html lang="de">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        html, body {{
+          margin: 0;
+          padding: 0;
+          background: transparent;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }}
+        button {{
+          width: 100%;
+          min-height: 44px;
+          border-radius: 15px;
+          border: 1px solid #e5e7eb;
+          background: white;
+          color: #111827;
+          font-size: 15px;
+          font-weight: 800;
+          cursor: pointer;
+          box-shadow: 0 1px 3px rgba(0,0,0,.04);
+          -webkit-tap-highlight-color: transparent;
+        }}
+        button:active {{
+          transform: scale(.98);
+          background: #f3f4f6;
+        }}
+      </style>
+    </head>
+    <body>
+      <button type="button" id="audioButton">🔊 Ton</button>
+      <script>
+        const text = {safe_text};
+        const button = document.getElementById("audioButton");
 
-            window.speechSynthesis.cancel();
+        button.addEventListener("click", function() {{
+          if (!text || !("speechSynthesis" in window)) {{
+            button.textContent = "Ton nicht verfügbar";
+            return;
+          }}
 
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = "it-IT";
-            utterance.rate = 0.86;
-            utterance.pitch = 1.0;
+          window.speechSynthesis.cancel();
 
-            const voices = window.speechSynthesis.getVoices();
-            const italianVoice = voices.find(
-                voice => voice.lang && voice.lang.toLowerCase().startsWith("it")
-            );
-            if (italianVoice) utterance.voice = italianVoice;
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = "it-IT";
+          utterance.rate = 0.86;
+          utterance.pitch = 1.0;
 
-            window.speechSynthesis.speak(utterance);
-        }};
-        </script>
-        """,
-        unsafe_allow_javascript=True,
-    )
+          const voices = window.speechSynthesis.getVoices();
+          const italianVoice = voices.find(
+            voice => voice.lang && voice.lang.toLowerCase().startsWith("it")
+          );
+          if (italianVoice) utterance.voice = italianVoice;
+
+          window.speechSynthesis.speak(utterance);
+        }});
+      </script>
+    </body>
+    </html>
+    """
+
+    st.iframe(audio_html, width="stretch", height=48, tab_index=0)
 
 def normalize_cards_df(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize either Excel-style columns or Supabase-style columns and remove all NaN values."""
