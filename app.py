@@ -128,32 +128,41 @@ supabase = get_supabase_client()
 # Hilfsfunktionen
 # -----------------------------
 def render_audio_button(text_to_speak: str):
-    """Italian pronunciation using Streamlit's current HTML API."""
+    """Italian pronunciation using browser speech synthesis."""
     safe_text = json.dumps(text_to_speak or "")
+    function_name = "speakItalian_" + hashlib.sha1(
+        (text_to_speak or "").encode("utf-8")
+    ).hexdigest()[:12]
+
     st.html(
         f"""
         <div class="audio-wrap">
-          <button type="button" onclick="speakItalian_{id(text_to_speak)}()">🔊 Ton</button>
+          <button type="button" onclick="window.{function_name}()">🔊 Ton</button>
         </div>
         <script>
-        function speakItalian_{id(text_to_speak)}() {{
+        window.{function_name} = function() {{
             const text = {safe_text};
-            if (!text) return;
+            if (!text || !("speechSynthesis" in window)) return;
+
             window.speechSynthesis.cancel();
+
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = "it-IT";
             utterance.rate = 0.86;
             utterance.pitch = 1.0;
+
             const voices = window.speechSynthesis.getVoices();
-            const italianVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith("it"));
+            const italianVoice = voices.find(
+                voice => voice.lang && voice.lang.toLowerCase().startsWith("it")
+            );
             if (italianVoice) utterance.voice = italianVoice;
+
             window.speechSynthesis.speak(utterance);
-        }}
+        }};
         </script>
         """,
         unsafe_allow_javascript=True,
     )
-
 
 def normalize_cards_df(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize either Excel-style columns or Supabase-style columns and remove all NaN values."""
