@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from supabase import create_client
 
 
@@ -129,14 +128,15 @@ supabase = get_supabase_client()
 # Hilfsfunktionen
 # -----------------------------
 def render_audio_button(text_to_speak: str):
+    """Italian pronunciation using Streamlit's current HTML API."""
     safe_text = json.dumps(text_to_speak or "")
-    components.html(
+    st.html(
         f"""
         <div class="audio-wrap">
-          <button onclick="speakItalian()">🔊 Ton</button>
+          <button type="button" onclick="speakItalian_{id(text_to_speak)}()">🔊 Ton</button>
         </div>
         <script>
-        function speakItalian() {{
+        function speakItalian_{id(text_to_speak)}() {{
             const text = {safe_text};
             if (!text) return;
             window.speechSynthesis.cancel();
@@ -151,7 +151,7 @@ def render_audio_button(text_to_speak: str):
         }}
         </script>
         """,
-        height=58,
+        unsafe_allow_javascript=True,
     )
 
 
